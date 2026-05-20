@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::{collections::HashMap, io::Read};
 
 use flate2::read::GzDecoder;
@@ -6,7 +6,8 @@ use flate2::read::GzDecoder;
 #[derive(Deserialize, Debug)]
 pub struct Reference {
     pub vector: [f64; 14],
-    pub label: String,
+    #[serde(rename = "label", deserialize_with = "deserialize_label")]
+    pub is_fraud: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -56,4 +57,12 @@ impl Resources {
             mcc_risk,
         })
     }
+}
+
+fn deserialize_label<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(s == "fraud")
 }

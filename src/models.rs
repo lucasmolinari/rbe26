@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct TransactionRequest {
+    #[allow(unused)]
     pub id: String,
     pub transaction: TransactionData,
     pub customer: CustomerData,
