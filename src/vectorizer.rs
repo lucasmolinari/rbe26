@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, Timelike};
 
-use crate::models::{Normalization, TransactionRequest};
+use crate::models::TransactionRequest;
+use crate::resources::Normalization;
 
 pub fn vectorize(
     tx: &TransactionRequest,
@@ -14,9 +15,8 @@ pub fn vectorize(
     let tx_requested_at =
         DateTime::parse_from_rfc3339(&tx.transaction.requested_at).unwrap_or_default();
 
-    vec[0] = (tx.transaction.amount / normalization.max_ammount).clamp(0.0, 1.0);
-    vec[1] = (tx.transaction.installments as f64 / normalization.max_installments as f64)
-        .clamp(0.0, 1.0);
+    vec[0] = (tx.transaction.amount / normalization.max_amount).clamp(0.0, 1.0);
+    vec[1] = (tx.transaction.installments as f64 / normalization.max_installments).clamp(0.0, 1.0);
     vec[2] = ((tx.transaction.amount / tx.customer.avg_amount) / normalization.amount_vs_avg_ratio)
         .clamp(0.0, 1.0);
     vec[3] = (tx_requested_at.hour() as f64 / 23.0).clamp(0.0, 1.0);
@@ -27,7 +27,7 @@ pub fn vectorize(
         let minutes_elapsed = tx_requested_at
             .signed_duration_since(last_tx_time)
             .num_minutes();
-        vec[5] = (minutes_elapsed as f64 / normalization.max_minutes as f64).clamp(0.0, 1.0);
+        vec[5] = (minutes_elapsed as f64 / normalization.max_minutes).clamp(0.0, 1.0);
         vec[6] = (last_tx.km_from_current / normalization.max_km).clamp(0.0, 1.0);
     } else {
         vec[5] = -1.0;
@@ -56,10 +56,10 @@ mod tests {
 
     fn norm() -> Normalization {
         Normalization {
-            max_ammount: 10000.0,
-            max_installments: 12,
+            max_amount: 10000.0,
+            max_installments: 12.0,
             amount_vs_avg_ratio: 10.0,
-            max_minutes: 1440,
+            max_minutes: 1440.0,
             max_km: 1000.0,
             max_tx_count_24h: 20.0,
             max_merchant_avg_amount: 10000.0,

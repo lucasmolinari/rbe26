@@ -1,20 +1,37 @@
 mod handlers;
 mod models;
+mod resources;
 mod vectorizer;
 
 use axum::{
     Router,
     routing::{get, post},
 };
-use std::net::SocketAddr;
+use std::sync::Arc;
 
 #[tokio::main]
-async fn main() {
-    let app = Router::new()
-        .route("/ready", get(handlers::ready))
-        .route("/fraud-score", post(handlers::fraud_score));
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let resources = resources::Resources::new()?;
+    let resources = Arc::new(resources);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 9999));
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let app = Router::new().route("/ready", get(handlers::ready)).route(
+        "/fraud-score",
+        post(handlers::fraud_score).with_state(resources),
+    );
+
+    let addr = std::env::var("ADDR").unwrap_or_else(|_| "0.0.0.0:9999".into());
+    eprintln!("listening on {}", addr);
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to listen for signal");
 }
