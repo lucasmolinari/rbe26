@@ -1,8 +1,6 @@
 services:
   qdrant:
-    build:
-      context: .
-      target: qdrant-runtime
+    image: lucasmolinari/rbe26-qdrant:v1
     healthcheck:
       test: ["CMD", "bash", "-c", "echo '' > /dev/tcp/localhost/6333"]
       interval: 5s
@@ -16,9 +14,7 @@ services:
           memory: "275MB"
 
   api1:
-    build:
-      context: .
-      target: api
+    image: lucasmolinari/rbe26-api:v1
     environment:
       - QDRANT_URL=http://qdrant:6334
     depends_on:
@@ -31,9 +27,7 @@ services:
           memory: "25MB"
 
   api2:
-    build:
-      context: .
-      target: api
+    image: lucasmolinari/rbe26-api:v1
     environment:
       - QDRANT_URL=http://qdrant:6334
     depends_on:
