@@ -1,0 +1,10 @@
+{
+  "participants": ["Lucas Molinari"],
+  "social": [
+    "https://github.com/lucasmolinari",
+    "https://www.linkedin.com/in/lucas-molinari-66106630a"
+  ],
+  "source-code-repo": "https://github.com/lucasmolinari/rbe26",
+  "stack": ["rust", "qdrant", "nginx"],
+  "open_to_work": true
+}
