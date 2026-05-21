@@ -6,6 +6,7 @@ use crate::{
     vectorizer::vectorize,
 };
 use axum::{Json, extract::State, http::StatusCode};
+use qdrant_client::qdrant::SearchPointsBuilder;
 
 pub async fn ready() -> StatusCode {
     StatusCode::OK
@@ -17,32 +18,35 @@ pub async fn fraud_score(
 ) -> Json<FraudResponse> {
     let vectorized = vectorize(&payload, &resources.normalization, &resources.mcc_risk);
 
-    let mut distances: Vec<(f64, bool)> = resources
-        .references
-        .iter()
-        .map(|r| (euclidean_distance(&vectorized, &r.vector), r.is_fraud))
-        .collect();
+    let search_result = resources
+        .qdrant_client
+        .search_points(
+            SearchPointsBuilder::new("references", vectorized.iter().map(|&x| x as f32).collect::<Vec<f32>>(), 5)
+                .with_payload(true),
+        )
+        .await;
 
-    distances.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let fraud_count = match search_result {
+        Ok(result) => result
+            .result
+            .iter()
+            .filter(|hit| {
+                hit.payload
+                    .get("is_fraud")
+                    .and_then(|v| match v.kind {
+                        Some(qdrant_client::qdrant::value::Kind::BoolValue(b)) => Some(b),
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            })
+            .count() as f64,
+        Err(_) => 0.0,
+    };
 
-    let fraud_count = distances
-        .iter()
-        .take(5)
-        .filter(|(_, is_fraud)| *is_fraud)
-        .count();
-
-    let fraud_score = fraud_count as f64 / 5.0;
+    let fraud_score = fraud_count / 5.0;
 
     Json(FraudResponse {
         approved: fraud_score < 0.6,
         fraud_score,
     })
-}
-
-fn euclidean_distance(a: &[f64; 14], b: &[f64; 14]) -> f64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x - y).powi(2))
-        .sum::<f64>()
-        .sqrt()
 }
