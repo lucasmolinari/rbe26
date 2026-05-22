@@ -3,10 +3,10 @@ services:
     image: lucasmolinari/rbe26-qdrant:v1
     healthcheck:
       test: ["CMD", "bash", "-c", "echo '' > /dev/tcp/localhost/6333"]
-      interval: 5s
+      interval: 3s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      retries: 20
+      start_period: 30s
     deploy:
       resources:
         limits:
