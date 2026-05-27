@@ -6,6 +6,10 @@ path = "src/main.rs"
 name = "preprocessor"
 path = "src/preprocessor/main.rs"
 
+[[bin]]
+name = "lb"
+path = "src/lb.rs"
+
 [package]
 name = "rbe26"
 version = "0.1.0"

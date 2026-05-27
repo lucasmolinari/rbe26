@@ -2,7 +2,7 @@ FROM rust:1.87-slim AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --bin api --bin preprocessor
+RUN cargo build --release --bin api --bin preprocessor --bin lb
 
 FROM builder AS vectors
 WORKDIR /app
@@ -16,3 +16,8 @@ COPY --from=vectors /app/resources/vectors.bin ./resources/
 COPY resources/normalization.json ./resources/
 COPY resources/mcc_risk.json ./resources/
 CMD ["./api"]
+
+FROM debian:bookworm-slim AS lb
+WORKDIR /app
+COPY --from=builder /app/target/release/lb ./lb
+CMD ["./lb"]
