@@ -1,33 +1,30 @@
 services:
-  api1:
+  api1: &api1
     image: lucasmolinari/rbe26:v2
     environment:
       - VECTORS_PATH=/app/resources/vectors.bin
     deploy:
       resources:
         limits:
-          cpus: "0.4"
-          memory: "165MB"
+          cpus: "0.425"
+          memory: "170MB"
+
   api2:
-    image: lucasmolinari/rbe26:v2
+    <<: *api1
     environment:
       - VECTORS_PATH=/app/resources/vectors.bin
-    deploy:
-      resources:
-        limits:
-          cpus: "0.4"
-          memory: "165MB"
-  nginx:
-    image: nginx:alpine
+
+  lb:
+    image: lucasmolinari/rbe26-lb:latest
     ports:
       - "9999:9999"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    environment:
+      - UPSTREAMS=api1:9999,api2:9999
     depends_on:
       - api1
       - api2
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "20MB"
+          cpus: "0.15"
+          memory: "10MB"
