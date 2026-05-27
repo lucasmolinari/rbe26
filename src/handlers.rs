@@ -1,18 +1,14 @@
 use std::sync::Arc;
 
 use crate::{
-    buckets::{
-        AMOUNT_BINS, HOME_BINS, HOUR_BINS, MCC_BINS, RATIO_BINS, TX_BINS, VECTOR_BYTES, bucket_key,
-        bucket_key_from_quantized, decode_bucket_key,
-    },
+    buckets::{VECTOR_BYTES, partition_key_from_quantized},
     models::{FraudResponse, TransactionRequest},
-    resources::Resources,
+    resources::{Block, Resources},
     vectorizer::vectorize,
 };
 use axum::{Json, extract::State, http::StatusCode};
 
-const MIN_CANDIDATES: usize = 512;
-const MAX_RADIUS: usize = 5;
+const DIM_ORDER: [usize; 14] = [0, 2, 7, 8, 12, 3, 5, 6, 1, 4, 9, 10, 11, 13];
 
 pub async fn ready() -> StatusCode {
     StatusCode::OK
@@ -50,85 +46,78 @@ fn quantize_query(vector: &[f64; 14], scale: f64) -> [i16; 14] {
 fn nearest_5(resources: &Resources, query: &[i16; 14]) -> [usize; 5] {
     let mut best_ids = [0usize; 5];
     let mut best_distances = [u64::MAX; 5];
-    let mut candidates = 0usize;
-    let center = decode_bucket_key(bucket_key_from_quantized(query));
 
-    for radius in 0..=MAX_RADIUS {
-        for amount in bounded_range(center[0], radius, AMOUNT_BINS) {
-            for ratio in bounded_range(center[1], radius, RATIO_BINS) {
-                for hour in bounded_range(center[2], radius.min(1), HOUR_BINS) {
-                    for home in bounded_range(center[3], radius, HOME_BINS) {
-                        for tx in bounded_range(center[4], radius, TX_BINS) {
-                            for mcc in bounded_range(center[5], radius.min(1), MCC_BINS) {
-                                if radius > 0 {
-                                    let ring = amount
-                                        .abs_diff(center[0])
-                                        .max(ratio.abs_diff(center[1]))
-                                        .max(home.abs_diff(center[3]))
-                                        .max(tx.abs_diff(center[4]));
-                                    if ring != radius {
-                                        continue;
-                                    }
-                                }
+    let partition = partition_key_from_quantized(query);
+    let partition_start = resources.partition_offsets[partition] as usize;
+    let partition_end = resources.partition_offsets[partition + 1] as usize;
 
-                                let key = bucket_key(
-                                    amount, ratio, hour, home, tx, mcc, center[6], center[7],
-                                    center[8], center[9],
-                                );
-                                let start = resources.bucket_offsets[key] as usize;
-                                let end = resources.bucket_offsets[key + 1] as usize;
-                                candidates += end - start;
-                                scan_bucket(
-                                    resources,
-                                    query,
-                                    start,
-                                    end,
-                                    &mut best_ids,
-                                    &mut best_distances,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if candidates >= MIN_CANDIDATES && best_distances[4] != u64::MAX {
-            break;
-        }
-    }
-
-    if best_distances[4] == u64::MAX {
-        scan_bucket(
+    for block_id in partition_start..partition_end {
+        scan_block(
             resources,
             query,
-            0,
-            resources.vector_count.min(2048),
+            &resources.blocks[block_id],
             &mut best_ids,
             &mut best_distances,
         );
     }
 
+    for block_id in 0..resources.blocks.len() {
+        if block_id >= partition_start && block_id < partition_end {
+            continue;
+        }
+
+        let block = &resources.blocks[block_id];
+        if bbox_can_improve(block, query, best_distances[4]) {
+            scan_block(resources, query, block, &mut best_ids, &mut best_distances);
+        }
+    }
+
     best_ids
 }
 
-fn scan_bucket(
+fn bbox_can_improve(block: &Block, query: &[i16; 14], limit: u64) -> bool {
+    let mut distance = 0u64;
+
+    for dim in DIM_ORDER {
+        let query_value = query[dim] as i64;
+        let min = block.min[dim] as i64;
+        let max = block.max[dim] as i64;
+        let delta = if query_value < min {
+            min - query_value
+        } else if query_value > max {
+            query_value - max
+        } else {
+            0
+        };
+        distance += (delta * delta) as u64;
+        if distance > limit {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn scan_block(
     resources: &Resources,
     query: &[i16; 14],
-    start: usize,
-    end: usize,
+    block: &Block,
     best_ids: &mut [usize; 5],
     best_distances: &mut [u64; 5],
 ) {
-    for id in start..end {
+    for id in block.start as usize..block.end as usize {
         let offset = id * VECTOR_BYTES;
         let mut distance = 0u64;
+        let limit = best_distances[4];
 
-        for (dim, query_value) in query.iter().enumerate() {
+        for dim in DIM_ORDER {
             let i = offset + dim * 2;
             let value = i16::from_le_bytes([resources.vectors[i], resources.vectors[i + 1]]);
-            let delta = value as i32 - *query_value as i32;
+            let delta = value as i64 - query[dim] as i64;
             distance += (delta * delta) as u64;
+            if distance >= limit {
+                break;
+            }
         }
 
         if distance < best_distances[4] {
@@ -146,8 +135,4 @@ fn insert_best(id: usize, distance: u64, best_ids: &mut [usize; 5], best_distanc
     }
     best_distances[pos] = distance;
     best_ids[pos] = id;
-}
-
-fn bounded_range(center: usize, radius: usize, bins: usize) -> std::ops::RangeInclusive<usize> {
-    center.saturating_sub(radius)..=center.saturating_add(radius).min(bins - 1)
 }

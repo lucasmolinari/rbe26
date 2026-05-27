@@ -10,11 +10,12 @@ pub const MCC_BINS: usize = 4;
 const LAST_STATES: usize = 2;
 const BOOL_STATES: usize = 2;
 
-pub const BUCKET_COUNT: usize =
-    AMOUNT_BINS * RATIO_BINS * HOUR_BINS * HOME_BINS * TX_BINS * MCC_BINS * 2 * 2 * 2 * 2;
+pub const BLOCK_SIZE: usize = 64;
+pub const PARTITION_COUNT: usize =
+    AMOUNT_BINS * RATIO_BINS * HOUR_BINS * MCC_BINS * 2 * 2 * 2 * 2;
 
-pub fn bucket_key_from_quantized(vector: &[i16; VECTOR_DIMS]) -> usize {
-    bucket_key(
+pub fn sort_key_from_quantized(vector: &[i16; VECTOR_DIMS]) -> usize {
+    sort_key(
         bin01(vector[0], AMOUNT_BINS),
         bin01(vector[2], RATIO_BINS),
         bin01(vector[3], HOUR_BINS),
@@ -28,7 +29,7 @@ pub fn bucket_key_from_quantized(vector: &[i16; VECTOR_DIMS]) -> usize {
     )
 }
 
-pub fn bucket_key(
+fn sort_key(
     amount: usize,
     ratio: usize,
     hour: usize,
@@ -53,29 +54,38 @@ pub fn bucket_key(
     key
 }
 
-pub fn decode_bucket_key(key: usize) -> [usize; 10] {
-    let unknown = key % BOOL_STATES;
-    let key = key / BOOL_STATES;
-    let card = key % BOOL_STATES;
-    let key = key / BOOL_STATES;
-    let online = key % BOOL_STATES;
-    let key = key / BOOL_STATES;
-    let last = key % LAST_STATES;
-    let key = key / LAST_STATES;
-    let mcc = key % MCC_BINS;
-    let key = key / MCC_BINS;
-    let tx = key % TX_BINS;
-    let key = key / TX_BINS;
-    let home = key % HOME_BINS;
-    let key = key / HOME_BINS;
-    let hour = key % HOUR_BINS;
-    let key = key / HOUR_BINS;
-    let ratio = key % RATIO_BINS;
-    let amount = key / RATIO_BINS;
+pub fn partition_key_from_quantized(vector: &[i16; VECTOR_DIMS]) -> usize {
+    partition_key(
+        bin01(vector[0], AMOUNT_BINS),
+        bin01(vector[2], RATIO_BINS),
+        bin01(vector[3], HOUR_BINS),
+        bin01(vector[12], MCC_BINS),
+        usize::from(vector[5] >= 0),
+        bin_bool(vector[9]),
+        bin_bool(vector[10]),
+        bin_bool(vector[11]),
+    )
+}
 
-    [
-        amount, ratio, hour, home, tx, mcc, last, online, card, unknown,
-    ]
+fn partition_key(
+    amount: usize,
+    ratio: usize,
+    hour: usize,
+    mcc: usize,
+    last: usize,
+    online: usize,
+    card: usize,
+    unknown: usize,
+) -> usize {
+    let mut key = amount;
+    key = key * RATIO_BINS + ratio;
+    key = key * HOUR_BINS + hour;
+    key = key * MCC_BINS + mcc;
+    key = key * LAST_STATES + last;
+    key = key * BOOL_STATES + online;
+    key = key * BOOL_STATES + card;
+    key = key * BOOL_STATES + unknown;
+    key
 }
 
 fn bin01(value: i16, bins: usize) -> usize {
