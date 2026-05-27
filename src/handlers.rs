@@ -21,18 +21,21 @@ pub async fn fraud_score(
     let vectorized = vectorize(&payload, &resources.normalization, &resources.mcc_risk);
     let query = quantize_query(&vectorized, resources.vector_scale);
     let neighbours = nearest_5(resources.as_ref(), &query);
+    let fraud_count = count_fraud(resources.as_ref(), &neighbours);
 
-    let fraud_count = neighbours
-        .iter()
-        .filter(|&&id| resources.labels[id] == 1)
-        .count() as f64;
-
-    let fraud_score = fraud_count / 5.0;
+    let fraud_score = fraud_count as f64 / 5.0;
 
     Json(FraudResponse {
         approved: fraud_score < 0.6,
         fraud_score,
     })
+}
+
+fn count_fraud(resources: &Resources, neighbours: &[usize; 5]) -> usize {
+    neighbours
+        .iter()
+        .filter(|&&id| resources.labels[id] == 1)
+        .count()
 }
 
 fn quantize_query(vector: &[f64; 14], scale: f64) -> [i16; 14] {
@@ -61,41 +64,82 @@ fn nearest_5(resources: &Resources, query: &[i16; 14]) -> [usize; 5] {
         );
     }
 
-    for block_id in 0..resources.blocks.len() {
-        if block_id >= partition_start && block_id < partition_end {
-            continue;
-        }
-
-        let block = &resources.blocks[block_id];
-        if bbox_can_improve(block, query, best_distances[4]) {
-            scan_block(resources, query, block, &mut best_ids, &mut best_distances);
-        }
-    }
+    scan_other_partitions(
+        resources,
+        query,
+        partition,
+        &mut best_ids,
+        &mut best_distances,
+    );
 
     best_ids
 }
 
-fn bbox_can_improve(block: &Block, query: &[i16; 14], limit: u64) -> bool {
+fn scan_other_partitions(
+    resources: &Resources,
+    query: &[i16; 14],
+    partition: usize,
+    best_ids: &mut [usize; 5],
+    best_distances: &mut [u64; 5],
+) {
+    let mut partitions = Vec::with_capacity(resources.non_empty_partitions.len());
+
+    for &other_partition in &resources.non_empty_partitions {
+        if other_partition == partition {
+            continue;
+        }
+
+        let bounds = &resources.partition_bounds[other_partition];
+        if let Some(distance) = bbox_lower_bound(&bounds.min, &bounds.max, query, best_distances[4])
+        {
+            partitions.push((distance, other_partition));
+        }
+    }
+
+    partitions.sort_unstable_by_key(|&(distance, _)| distance);
+
+    for (distance, other_partition) in partitions {
+        if distance >= best_distances[4] {
+            break;
+        }
+
+        let start = resources.partition_offsets[other_partition] as usize;
+        let end = resources.partition_offsets[other_partition + 1] as usize;
+        for block_id in start..end {
+            let block = &resources.blocks[block_id];
+            if bbox_lower_bound(&block.min, &block.max, query, best_distances[4]).is_some() {
+                scan_block(resources, query, block, best_ids, best_distances);
+            }
+        }
+    }
+}
+
+fn bbox_lower_bound(
+    min: &[i16; 14],
+    max: &[i16; 14],
+    query: &[i16; 14],
+    limit: u64,
+) -> Option<u64> {
     let mut distance = 0u64;
 
     for dim in DIM_ORDER {
         let query_value = query[dim] as i64;
-        let min = block.min[dim] as i64;
-        let max = block.max[dim] as i64;
-        let delta = if query_value < min {
-            min - query_value
-        } else if query_value > max {
-            query_value - max
+        let lower = min[dim] as i64;
+        let upper = max[dim] as i64;
+        let delta = if query_value < lower {
+            lower - query_value
+        } else if query_value > upper {
+            query_value - upper
         } else {
             0
         };
         distance += (delta * delta) as u64;
-        if distance > limit {
-            return false;
+        if distance >= limit {
+            return None;
         }
     }
 
-    true
+    Some(distance)
 }
 
 fn scan_block(

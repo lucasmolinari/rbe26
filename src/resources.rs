@@ -19,6 +19,8 @@ pub struct Resources {
     pub vectors: Vec<u8>,
     pub labels: Vec<u8>,
     pub blocks: Vec<Block>,
+    pub partition_bounds: Vec<Bounds>,
+    pub non_empty_partitions: Vec<usize>,
     pub partition_offsets: Vec<u32>,
     pub vector_count: usize,
     pub vector_scale: f64,
@@ -29,6 +31,11 @@ pub struct Resources {
 pub struct Block {
     pub start: u32,
     pub end: u32,
+    pub min: [i16; VECTOR_DIMS],
+    pub max: [i16; VECTOR_DIMS],
+}
+
+pub struct Bounds {
     pub min: [i16; VECTOR_DIMS],
     pub max: [i16; VECTOR_DIMS],
 }
@@ -60,6 +67,8 @@ impl Resources {
         eprintln!("loading bucketed vectors from {vectors_path}");
         let (vectors, labels, blocks, partition_offsets, vector_count, vector_scale) =
             load_compact_vectors(&vectors_path)?;
+        let partition_bounds = build_partition_bounds(&blocks, &partition_offsets);
+        let non_empty_partitions = build_non_empty_partitions(&partition_offsets);
         eprintln!(
             "block index loaded ({vector_count} points, {} blocks)",
             blocks.len()
@@ -69,6 +78,8 @@ impl Resources {
             vectors,
             labels,
             blocks,
+            partition_bounds,
+            non_empty_partitions,
             partition_offsets,
             vector_count,
             vector_scale,
@@ -174,4 +185,47 @@ fn parse_blocks(bytes: &[u8], vector_count: usize) -> Result<Vec<Block>, String>
     }
 
     Ok(blocks)
+}
+
+fn build_partition_bounds(blocks: &[Block], partition_offsets: &[u32]) -> Vec<Bounds> {
+    let mut bounds = Vec::with_capacity(PARTITION_COUNT);
+
+    for partition in 0..PARTITION_COUNT {
+        let start = partition_offsets[partition] as usize;
+        let end = partition_offsets[partition + 1] as usize;
+
+        if start == end {
+            bounds.push(Bounds {
+                min: [0; VECTOR_DIMS],
+                max: [0; VECTOR_DIMS],
+            });
+            continue;
+        }
+
+        let mut min = [i16::MAX; VECTOR_DIMS];
+        let mut max = [i16::MIN; VECTOR_DIMS];
+
+        for block in &blocks[start..end] {
+            for dim in 0..VECTOR_DIMS {
+                min[dim] = min[dim].min(block.min[dim]);
+                max[dim] = max[dim].max(block.max[dim]);
+            }
+        }
+
+        bounds.push(Bounds { min, max });
+    }
+
+    bounds
+}
+
+fn build_non_empty_partitions(partition_offsets: &[u32]) -> Vec<usize> {
+    let mut partitions = Vec::new();
+
+    for partition in 0..PARTITION_COUNT {
+        if partition_offsets[partition] != partition_offsets[partition + 1] {
+            partitions.push(partition);
+        }
+    }
+
+    partitions
 }

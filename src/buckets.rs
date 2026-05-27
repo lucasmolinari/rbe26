@@ -11,8 +11,7 @@ const LAST_STATES: usize = 2;
 const BOOL_STATES: usize = 2;
 
 pub const BLOCK_SIZE: usize = 64;
-pub const PARTITION_COUNT: usize =
-    AMOUNT_BINS * RATIO_BINS * HOUR_BINS * MCC_BINS * 2 * 2 * 2 * 2;
+pub const PARTITION_COUNT: usize = AMOUNT_BINS * RATIO_BINS * HOUR_BINS * MCC_BINS * 2 * 2 * 2 * 2;
 
 pub fn sort_key_from_quantized(vector: &[i16; VECTOR_DIMS]) -> usize {
     sort_key(
