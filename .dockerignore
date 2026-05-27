@@ -1,0 +1,6 @@
+resources/buckets.bin
+
+target/
+.git/
+test/
+docs/

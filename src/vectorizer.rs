@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, Datelike, Timelike};
-
 use crate::models::TransactionRequest;
 use crate::resources::Normalization;
 
@@ -12,21 +10,18 @@ pub fn vectorize(
 ) -> [f64; 14] {
     let mut vec = [0.0f64; 14];
 
-    let tx_requested_at =
-        DateTime::parse_from_rfc3339(&tx.transaction.requested_at).unwrap_or_default();
+    let tx_requested_at = parse_timestamp(&tx.transaction.requested_at);
 
     vec[0] = (tx.transaction.amount / normalization.max_amount).clamp(0.0, 1.0);
     vec[1] = (tx.transaction.installments as f64 / normalization.max_installments).clamp(0.0, 1.0);
     vec[2] = ((tx.transaction.amount / tx.customer.avg_amount) / normalization.amount_vs_avg_ratio)
         .clamp(0.0, 1.0);
-    vec[3] = (tx_requested_at.hour() as f64 / 23.0).clamp(0.0, 1.0);
-    vec[4] = (tx_requested_at.weekday().num_days_from_monday() as f64 / 6.0).clamp(0.0, 1.0);
+    vec[3] = (tx_requested_at.hour as f64 / 23.0).clamp(0.0, 1.0);
+    vec[4] = (tx_requested_at.weekday as f64 / 6.0).clamp(0.0, 1.0);
 
     if let Some(last_tx) = &tx.last_transaction {
-        let last_tx_time = DateTime::parse_from_rfc3339(&last_tx.timestamp).unwrap_or_default();
-        let minutes_elapsed = tx_requested_at
-            .signed_duration_since(last_tx_time)
-            .num_minutes();
+        let last_tx_time = parse_timestamp(&last_tx.timestamp);
+        let minutes_elapsed = tx_requested_at.minutes - last_tx_time.minutes;
         vec[5] = (minutes_elapsed as f64 / normalization.max_minutes).clamp(0.0, 1.0);
         vec[6] = (last_tx.km_from_current / normalization.max_km).clamp(0.0, 1.0);
     } else {
@@ -45,6 +40,68 @@ pub fn vectorize(
     vec[13] = (tx.merchant.avg_amount / normalization.max_merchant_avg_amount).clamp(0.0, 1.0);
 
     vec
+}
+
+struct Timestamp {
+    minutes: i64,
+    hour: u32,
+    weekday: u32,
+}
+
+fn parse_timestamp(value: &str) -> Timestamp {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 20
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes[19] == b'Z'
+    {
+        let year = parse_u32(&bytes[0..4]);
+        let month = parse_u32(&bytes[5..7]);
+        let day = parse_u32(&bytes[8..10]);
+        let hour = parse_u32(&bytes[11..13]);
+        let minute = parse_u32(&bytes[14..16]);
+
+        if let (Some(year), Some(month), Some(day), Some(hour), Some(minute)) =
+            (year, month, day, hour, minute)
+        {
+            let days = days_from_civil(year as i32, month as i32, day as i32);
+            return Timestamp {
+                minutes: days * 1440 + hour as i64 * 60 + minute as i64,
+                hour,
+                weekday: ((days + 3).rem_euclid(7)) as u32,
+            };
+        }
+    }
+
+    Timestamp {
+        minutes: 0,
+        hour: 0,
+        weekday: 3,
+    }
+}
+
+fn parse_u32(bytes: &[u8]) -> Option<u32> {
+    let mut value = 0u32;
+    for &byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u32::from(byte - b'0');
+    }
+    Some(value)
+}
+
+fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let month = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * month + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    i64::from(era * 146097 + doe - 719468)
 }
 
 #[cfg(test)]

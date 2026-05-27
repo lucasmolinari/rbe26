@@ -1,50 +1,26 @@
 services:
-  qdrant:
-    build:
-      context: .
-      target: qdrant-runtime
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo '' > /dev/tcp/localhost/6333"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "275MB"
-
   api1:
     build:
       context: .
       target: api
     environment:
-      - QDRANT_URL=http://qdrant:6334
-    depends_on:
-      qdrant:
-        condition: service_healthy
+      - VECTORS_PATH=/app/resources/vectors.bin
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "25MB"
-
+          cpus: "0.4"
+          memory: "165MB"
   api2:
     build:
       context: .
       target: api
     environment:
-      - QDRANT_URL=http://qdrant:6334
-    depends_on:
-      qdrant:
-        condition: service_healthy
+      - VECTORS_PATH=/app/resources/vectors.bin
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "25MB"
-
+          cpus: "0.4"
+          memory: "165MB"
   nginx:
     image: nginx:alpine
     ports:
@@ -57,5 +33,5 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.1"
-          memory: "25MB"
+          cpus: "0.2"
+          memory: "20MB"

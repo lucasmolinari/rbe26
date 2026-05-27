@@ -1,12 +1,8 @@
-mod handlers;
-mod models;
-mod resources;
-mod vectorizer;
-
 use axum::{
     Router,
     routing::{get, post},
 };
+use rbe26::{handlers, resources};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -31,7 +27,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to listen for signal");
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for ctrl-c");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to listen for terminate signal")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }
