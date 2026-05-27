@@ -1,6 +1,6 @@
 services:
   api1: &api1
-    image: lucasmolinari/rbe26:v2
+    image: lucasmolinari/rbe26-api:latest
     environment:
       - VECTORS_PATH=/app/resources/vectors.bin
     deploy:
