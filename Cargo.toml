@@ -1,3 +1,8 @@
+[package]
+name = "rbe26"
+version = "0.1.0"
+edition = "2024"
+
 [[bin]]
 name = "api"
 path = "src/main.rs"
@@ -10,10 +15,13 @@ path = "src/preprocessor/main.rs"
 name = "lb"
 path = "src/lb.rs"
 
-[package]
-name = "rbe26"
-version = "0.1.0"
-edition = "2024"
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
 
 [dependencies]
 axum = "0.8.9"
