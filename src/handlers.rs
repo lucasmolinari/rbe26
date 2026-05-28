@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 
 use crate::{
-    buckets::{VECTOR_BYTES, partition_key_from_quantized},
+    buckets::{VECTOR_DIMS, partition_key_from_quantized},
     models::{FraudResponse, TransactionRequest},
     resources::{Block, Resources},
     vectorizer::vectorize,
@@ -9,6 +9,24 @@ use crate::{
 use axum::{Json, extract::State, http::StatusCode};
 
 const DIM_ORDER: [usize; 14] = [0, 2, 7, 8, 12, 3, 5, 6, 1, 4, 9, 10, 11, 13];
+
+thread_local! {
+    static SEARCH_SCRATCH: RefCell<SearchScratch> = RefCell::new(SearchScratch::new());
+}
+
+struct SearchScratch {
+    partitions: Vec<(u64, usize)>,
+    blocks: Vec<(u64, usize)>,
+}
+
+impl SearchScratch {
+    fn new() -> Self {
+        Self {
+            partitions: Vec::with_capacity(4096),
+            blocks: Vec::with_capacity(256),
+        }
+    }
+}
 
 pub async fn ready() -> StatusCode {
     StatusCode::OK
@@ -21,7 +39,7 @@ pub async fn fraud_score(
     let vectorized = vectorize(&payload, &resources.normalization, &resources.mcc_risk);
     let query = quantize_query(&vectorized, resources.vector_scale);
     let neighbours = nearest_5(resources.as_ref(), &query);
-    let fraud_count = count_fraud(resources.as_ref(), &neighbours);
+    let fraud_count = count_labels(resources.as_ref(), &neighbours);
 
     let fraud_score = fraud_count as f64 / 5.0;
 
@@ -31,7 +49,7 @@ pub async fn fraud_score(
     })
 }
 
-fn count_fraud(resources: &Resources, neighbours: &[usize; 5]) -> usize {
+fn count_labels(resources: &Resources, neighbours: &[usize; 5]) -> usize {
     neighbours
         .iter()
         .filter(|&&id| resources.labels[id] == 1)
@@ -51,28 +69,48 @@ fn nearest_5(resources: &Resources, query: &[i16; 14]) -> [usize; 5] {
     let mut best_distances = [u64::MAX; 5];
 
     let partition = partition_key_from_quantized(query);
-    let partition_start = resources.partition_offsets[partition] as usize;
-    let partition_end = resources.partition_offsets[partition + 1] as usize;
-
-    for block_id in partition_start..partition_end {
-        scan_block(
+    SEARCH_SCRATCH.with_borrow_mut(|scratch| {
+        scan_partition_blocks(
             resources,
             query,
-            &resources.blocks[block_id],
+            partition,
             &mut best_ids,
             &mut best_distances,
+            scratch,
         );
-    }
 
-    scan_other_partitions(
-        resources,
-        query,
-        partition,
-        &mut best_ids,
-        &mut best_distances,
-    );
+        scan_other_partitions(
+            resources,
+            query,
+            partition,
+            &mut best_ids,
+            &mut best_distances,
+            scratch,
+        );
+    });
 
     best_ids
+}
+
+fn scan_partition_blocks(
+    resources: &Resources,
+    query: &[i16; 14],
+    partition: usize,
+    best_ids: &mut [usize; 5],
+    best_distances: &mut [u64; 5],
+    scratch: &mut SearchScratch,
+) {
+    let start = resources.partition_offsets[partition] as usize;
+    let end = resources.partition_offsets[partition + 1] as usize;
+    scan_block_range(
+        resources,
+        query,
+        start,
+        end,
+        best_ids,
+        best_distances,
+        scratch,
+    );
 }
 
 fn scan_other_partitions(
@@ -81,8 +119,9 @@ fn scan_other_partitions(
     partition: usize,
     best_ids: &mut [usize; 5],
     best_distances: &mut [u64; 5],
+    scratch: &mut SearchScratch,
 ) {
-    let mut partitions = Vec::with_capacity(resources.non_empty_partitions.len());
+    scratch.partitions.clear();
 
     for &other_partition in &resources.non_empty_partitions {
         if other_partition == partition {
@@ -92,25 +131,71 @@ fn scan_other_partitions(
         let bounds = &resources.partition_bounds[other_partition];
         if let Some(distance) = bbox_lower_bound(&bounds.min, &bounds.max, query, best_distances[4])
         {
-            partitions.push((distance, other_partition));
+            scratch.partitions.push((distance, other_partition));
         }
     }
 
-    partitions.sort_unstable_by_key(|&(distance, _)| distance);
+    scratch
+        .partitions
+        .sort_unstable_by_key(|&(distance, _)| distance);
 
-    for (distance, other_partition) in partitions {
+    let mut partition_index = 0;
+    while partition_index < scratch.partitions.len() {
+        let (distance, other_partition) = scratch.partitions[partition_index];
+        partition_index += 1;
+
         if distance >= best_distances[4] {
             break;
         }
 
         let start = resources.partition_offsets[other_partition] as usize;
         let end = resources.partition_offsets[other_partition + 1] as usize;
-        for block_id in start..end {
-            let block = &resources.blocks[block_id];
-            if bbox_lower_bound(&block.min, &block.max, query, best_distances[4]).is_some() {
-                scan_block(resources, query, block, best_ids, best_distances);
-            }
+        scan_block_range(
+            resources,
+            query,
+            start,
+            end,
+            best_ids,
+            best_distances,
+            scratch,
+        );
+    }
+}
+
+fn scan_block_range(
+    resources: &Resources,
+    query: &[i16; 14],
+    start: usize,
+    end: usize,
+    best_ids: &mut [usize; 5],
+    best_distances: &mut [u64; 5],
+    scratch: &mut SearchScratch,
+) {
+    scratch.blocks.clear();
+
+    for block_id in start..end {
+        let block = &resources.blocks[block_id];
+        if let Some(distance) = bbox_lower_bound(&block.min, &block.max, query, best_distances[4]) {
+            scratch.blocks.push((distance, block_id));
         }
+    }
+
+    scratch
+        .blocks
+        .sort_unstable_by_key(|&(distance, _)| distance);
+
+    for &(distance, block_id) in &scratch.blocks {
+        if distance >= best_distances[4] {
+            break;
+        }
+
+        scan_block(
+            resources,
+            query,
+            &resources.blocks[block_id],
+            best_ids,
+            best_distances,
+        );
     }
 }
 
@@ -150,13 +235,12 @@ fn scan_block(
     best_distances: &mut [u64; 5],
 ) {
     for id in block.start as usize..block.end as usize {
-        let offset = id * VECTOR_BYTES;
+        let offset = id * VECTOR_DIMS;
         let mut distance = 0u64;
         let limit = best_distances[4];
 
         for dim in DIM_ORDER {
-            let i = offset + dim * 2;
-            let value = i16::from_le_bytes([resources.vectors[i], resources.vectors[i + 1]]);
+            let value = resources.vectors[offset + dim];
             let delta = value as i64 - query[dim] as i64;
             distance += (delta * delta) as u64;
             if distance >= limit {

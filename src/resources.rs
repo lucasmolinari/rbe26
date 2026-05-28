@@ -16,7 +16,7 @@ pub struct Normalization {
 }
 
 pub struct Resources {
-    pub vectors: Vec<u8>,
+    pub vectors: Vec<i16>,
     pub labels: Vec<u8>,
     pub blocks: Vec<Block>,
     pub partition_bounds: Vec<Bounds>,
@@ -89,7 +89,7 @@ impl Resources {
     }
 }
 
-type CompactVectors = (Vec<u8>, Vec<u8>, Vec<Block>, Vec<u32>, usize, f64);
+type CompactVectors = (Vec<i16>, Vec<u8>, Vec<Block>, Vec<u32>, usize, f64);
 
 fn load_compact_vectors(path: &str) -> Result<CompactVectors, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("failed to open {path}: {e}"))?;
@@ -139,9 +139,13 @@ fn load_compact_vectors(path: &str) -> Result<CompactVectors, String> {
         .map_err(|e| format!("failed to read {path} block metadata: {e}"))?;
     let blocks = parse_blocks(&block_bytes, count)?;
 
-    let mut vectors = vec![0u8; count * VECTOR_BYTES];
-    file.read_exact(&mut vectors)
+    let mut vector_bytes = vec![0u8; count * VECTOR_BYTES];
+    file.read_exact(&mut vector_bytes)
         .map_err(|e| format!("failed to read {path} vectors: {e}"))?;
+    let vectors = vector_bytes
+        .chunks_exact(2)
+        .map(|bytes| i16::from_le_bytes(bytes.try_into().unwrap()))
+        .collect::<Vec<_>>();
 
     let mut labels = vec![0u8; count];
     file.read_exact(&mut labels)
