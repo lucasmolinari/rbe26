@@ -17,6 +17,7 @@ pub struct Normalization {
 
 pub struct Resources {
     pub vectors: Vec<i16>,
+    pub residuals: Vec<u8>,
     pub labels: Vec<u8>,
     pub blocks: Vec<Block>,
     pub partition_bounds: Vec<Bounds>,
@@ -65,7 +66,7 @@ impl Resources {
         let vectors_path =
             std::env::var("VECTORS_PATH").unwrap_or_else(|_| "resources/vectors.bin".to_string());
         eprintln!("loading bucketed vectors from {vectors_path}");
-        let (vectors, labels, blocks, partition_offsets, vector_count, vector_scale) =
+        let (vectors, residuals, labels, blocks, partition_offsets, vector_count, vector_scale) =
             load_compact_vectors(&vectors_path)?;
         let partition_bounds = build_partition_bounds(&blocks, &partition_offsets);
         let non_empty_partitions = build_non_empty_partitions(&partition_offsets);
@@ -76,6 +77,7 @@ impl Resources {
 
         Ok(Self {
             vectors,
+            residuals,
             labels,
             blocks,
             partition_bounds,
@@ -89,7 +91,7 @@ impl Resources {
     }
 }
 
-type CompactVectors = (Vec<i16>, Vec<u8>, Vec<Block>, Vec<u32>, usize, f64);
+type CompactVectors = (Vec<i16>, Vec<u8>, Vec<u8>, Vec<Block>, Vec<u32>, usize, f64);
 
 fn load_compact_vectors(path: &str) -> Result<CompactVectors, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("failed to open {path}: {e}"))?;
@@ -110,7 +112,9 @@ fn load_compact_vectors(path: &str) -> Result<CompactVectors, String> {
 
     let partition_offsets_len = (PARTITION_COUNT + 1) * std::mem::size_of::<u32>();
     let blocks_len = block_count * block_bytes();
-    let expected_len = 12 + partition_offsets_len + blocks_len + count * VECTOR_BYTES + count;
+    let residuals_len = count * VECTOR_DIMS;
+    let expected_len =
+        12 + partition_offsets_len + blocks_len + count * VECTOR_BYTES + residuals_len + count;
     let actual_len = file
         .metadata()
         .map_err(|e| format!("failed to stat {path}: {e}"))?
@@ -147,11 +151,23 @@ fn load_compact_vectors(path: &str) -> Result<CompactVectors, String> {
         .map(|bytes| i16::from_le_bytes(bytes.try_into().unwrap()))
         .collect::<Vec<_>>();
 
+    let mut residuals = vec![0u8; residuals_len];
+    file.read_exact(&mut residuals)
+        .map_err(|e| format!("failed to read {path} vector residuals: {e}"))?;
+
     let mut labels = vec![0u8; count];
     file.read_exact(&mut labels)
         .map_err(|e| format!("failed to read {path} labels: {e}"))?;
 
-    Ok((vectors, labels, blocks, partition_offsets, count, scale))
+    Ok((
+        vectors,
+        residuals,
+        labels,
+        blocks,
+        partition_offsets,
+        count,
+        scale,
+    ))
 }
 
 fn block_bytes() -> usize {

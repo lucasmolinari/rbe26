@@ -20,8 +20,12 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
-debug = false
+debug = 0
 strip = true
+overflow-checks = false
+
+[profile.release.package."*"]
+opt-level = 3
 
 [dependencies]
 axum = "0.8.9"

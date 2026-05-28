@@ -9,6 +9,8 @@ use rbe26::buckets::{
 };
 
 const VECTOR_SCALE: f32 = 32767.0;
+const RERANK_RESOLUTION: i32 = 256;
+const RERANK_SCALE: f64 = VECTOR_SCALE as f64 * RERANK_RESOLUTION as f64;
 
 #[derive(Deserialize)]
 struct Reference {
@@ -22,6 +24,7 @@ struct Record {
     sort_key: u32,
     label: u8,
     vector: [i16; VECTOR_DIMS],
+    residual: [u8; VECTOR_DIMS],
 }
 
 struct Block {
@@ -108,6 +111,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     for record in &records {
+        writer.write_all(&record.residual)?;
+    }
+    for record in &records {
         writer.write_all(&[record.label])?;
     }
     writer.flush()?;
@@ -137,10 +143,16 @@ impl<'de> Visitor<'de> for CollectorVisitor {
 
         while let Some(reference) = seq.next_element::<Reference>()? {
             let mut vector = [0i16; VECTOR_DIMS];
+            let mut residual = [0u8; VECTOR_DIMS];
 
             for (dim, value) in reference.vector.iter().enumerate() {
-                let value = (value.clamp(-1.0, 1.0) * VECTOR_SCALE as f64).round() as i16;
-                vector[dim] = value;
+                let value = value.clamp(-1.0, 1.0);
+                let quantized = (value * VECTOR_SCALE as f64).round() as i16;
+                let rerank = (value * RERANK_SCALE).round() as i32;
+                let delta = (rerank - quantized as i32 * RERANK_RESOLUTION).clamp(-128, 127);
+
+                vector[dim] = quantized;
+                residual[dim] = (delta + 128) as u8;
             }
 
             records.push(Record {
@@ -148,6 +160,7 @@ impl<'de> Visitor<'de> for CollectorVisitor {
                 sort_key: sort_key_from_quantized(&vector) as u32,
                 label: reference.is_fraud as u8,
                 vector,
+                residual,
             });
         }
 
